@@ -1,0 +1,76 @@
+# import necessary libraries
+import nltk
+import pandas as pd
+import re
+import string
+import time
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn.compose import make_column_transformer
+from sklearn.preprocessing import FunctionTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.metrics import precision_recall_fscore_support as score
+
+# download nltk stopwords
+nltk.download('stopwords')
+
+# load the dataset into pandas dataframe
+data = pd.read_csv("SMSSpamCollection.tsv", sep='\t')
+data.columns = ['label', 'body_text']
+
+# define function to count punctuation percentage in text
+def count_punct(text):
+    punct_count = sum([1 for char in text if char in string.punctuation])
+    return round(punct_count / (len(text) - text.count(" ")), 3) * 100
+
+# add 'body_len' and 'punct%' features to the dataset
+data['body_len'] = data['body_text'].apply(lambda x: len(x) - x.count(" "))
+data['punct%'] = data['body_text'].apply(lambda x: count_punct(x))
+
+# define function to clean text data
+def clean_text(text):
+    text = "".join([word.lower() for word in text if word not in string.punctuation])
+    tokens = re.split('\W+', text)
+    text = [nltk.PorterStemmer().stem(word) for word in tokens if word not in nltk.corpus.stopwords.words('english')]
+    return text
+
+# split dataset into train and test sets
+X_train, X_test, y_train, y_test = train_test_split(data[['body_text', 'body_len', 'punct%']], data['label'], test_size=0.2, random_state=42)
+
+# define a pipeline for text feature extraction and model training
+text_pipeline = Pipeline([
+                ('cleaner', FunctionTransformer(clean_text)),
+                ('vectorizer', TfidfVectorizer())
+            ])
+
+# define a pipeline for non-text feature extraction
+non_text_pipeline = Pipeline([
+                    ('preprocessor', FunctionTransformer(lambda x: x[['body_len', 'punct%']])),
+                ])
+
+# combine text and non-text pipelines using make_column_transformer
+preprocessor = make_column_transformer(
+                    (text_pipeline, 'body_text'),
+                    (non_text_pipeline, ['body_len', 'punct%']),
+                )
+
+# Define the pipeline for the Random Forest classifier
+rf_pipeline = Pipeline([
+    ('tfidf_vect', TfidfVectorizer(analyzer=clean_text)),
+    ('rf', RandomForestClassifier(n_jobs=-1))
+])
+
+# Define the hyperparameter grid for the Random Forest classifier
+rf_param_grid = {
+    'rf__n_estimators': [100, 150, 200],
+    'rf__max_depth': [None, 5, 10, 20]
+}
+
+# Perform a grid search with cross-validation for the Random Forest classifier
+rf_grid = GridSearchCV(rf_pipeline, rf_param_grid, cv=5, n_jobs=-1, verbose=2)
+rf_grid.fit(X_train, y_train)
+
+# Print the best hyperparameters and the corresponding cross-validation score
+print(f"Best parameters for Random Forest: {rf_grid.best_params_}")
+print(f"Cross-validation score for Random Forest: {rf_grid.best_score_:.3f}")
